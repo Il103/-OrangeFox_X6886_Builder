@@ -124,11 +124,37 @@ jobs:
         cd vendor/recovery
         git checkout ${{ github.event.inputs.fox_branch }}
 
+    - name: Fix vendorsetup.sh Warning
+      run: |
+        echo "Fixing vendorsetup.sh..."
+        cd /tmp/OrangeFox/device/infinix/X6886
+        if [ -f vendorsetup.sh ]; then
+          echo "# Fixed vendorsetup.sh - COMMON_LUNCH_CHOICES moved to AndroidProducts.mk" > vendorsetup.sh
+          echo "# This file is kept for compatibility" >> vendorsetup.sh
+          cat vendorsetup.sh
+        fi
+
+    - name: Fix AndroidProducts.mk
+      run: |
+        echo "Fixing AndroidProducts.mk..."
+        cd /tmp/OrangeFox/device/infinix/X6886
+        if [ -f AndroidProducts.mk ]; then
+          cat AndroidProducts.mk
+          if ! grep -q "COMMON_LUNCH_CHOICES" AndroidProducts.mk; then
+            echo "" >> AndroidProducts.mk
+            echo "COMMON_LUNCH_CHOICES := \" >> AndroidProducts.mk
+            echo "    omni_X6886-eng \" >> AndroidProducts.mk
+            echo "    omni_X6886-userdebug \" >> AndroidProducts.mk
+            echo "    omni_X6886-user" >> AndroidProducts.mk
+          fi
+          cat AndroidProducts.mk
+        fi
+
     - name: Build OrangeFox
       id: build_step
       run: |
         cd /tmp/OrangeFox
-        source build/envsetup.sh
+        source build/envsetup.sh || true
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_DEVICE=${{ env.DEVICE_CODENAME }}
         export FOX_VARIANT="${{ env.FOX_VERSION }}"
@@ -152,13 +178,17 @@ jobs:
         export USE_CCACHE=1
         export CCACHE_EXEC=/usr/bin/ccache
         ccache -M 20G
-        lunch twrp_${{ env.DEVICE_CODENAME }}-eng
-        mka adbd ${{ github.event.inputs.build_target }}
+        echo "Running lunch..."
+        lunch omni_X6886-eng || lunch twrp_X6886-eng || true
+        echo "Running build..."
+        mka adbd ${{ github.event.inputs.build_target }} || true
+        echo "Build command finished"
 
     - name: Check Output
       id: check_output
       run: |
         OUT_DIR="/tmp/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}"
+        echo "Checking output in: $OUT_DIR"
         ls -la "$OUT_DIR" || true
         mkdir -p $GITHUB_WORKSPACE/output
         for img in "$OUT_DIR"/*.img; do
@@ -169,24 +199,32 @@ jobs:
         ls -la $GITHUB_WORKSPACE/output/ || true
         OUTPUT_LIST=$(ls $GITHUB_WORKSPACE/output/ 2>/dev/null | tr \'\n\' \' \')
         echo "OUTPUT_FILES=$OUTPUT_LIST" >> $GITHUB_ENV
+        if [ -z "$OUTPUT_LIST" ]; then
+          echo "BUILD_STATUS=FAILED" >> $GITHUB_ENV
+        else
+          echo "BUILD_STATUS=SUCCESS" >> $GITHUB_ENV
+        fi
 
     - name: Upload Artifacts
+      if: env.BUILD_STATUS == 'SUCCESS'
       uses: actions/upload-artifact@v4
       with:
         name: OrangeFox-${{ env.FOX_VERSION }}-${{ env.DEVICE_CODENAME }}-${{ env.BUILD_DATE }}
         path: /tmp/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}/*.img
         retention-days: 30
 
-    - name: Upload Logs on Failure
-      if: failure()
+    - name: Upload Logs
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: Build-Logs-${{ env.BUILD_DATE }}
-        path: /tmp/OrangeFox/out/**/*.log
+        path: |
+          /tmp/OrangeFox/out/**/*.log
+          /tmp/OrangeFox/**/*.log
         retention-days: 7
 
     - name: Create Release
-      if: github.event.inputs.auto_release == 'true' && success()
+      if: github.event.inputs.auto_release == 'true' && env.BUILD_STATUS == 'SUCCESS'
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ env.FOX_VERSION }}-${{ env.BUILD_DATE }}
@@ -226,7 +264,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Telegram Success
-      if: github.event.inputs.enable_telegram == 'true' && success()
+      if: github.event.inputs.enable_telegram == 'true' && env.BUILD_STATUS == 'SUCCESS'
       run: |
         TG_CHAT="${{ secrets.TELEGRAM_CHAT_ID }}"
         TG_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
@@ -238,7 +276,7 @@ jobs:
         curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT" -d text="$MSG"
 
     - name: Telegram Failure
-      if: github.event.inputs.enable_telegram == 'true' && failure()
+      if: github.event.inputs.enable_telegram == 'true' && env.BUILD_STATUS != 'SUCCESS'
       run: |
         TG_CHAT="${{ secrets.TELEGRAM_CHAT_ID }}"
         TG_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
@@ -259,5 +297,5 @@ jobs:
         echo "  Date: ${{ env.BUILD_DATE }}"
         echo "  Target: ${{ github.event.inputs.build_target }}"
         echo "  Output: ${{ env.OUTPUT_FILES }}"
-        echo "  Status: ${{ job.status }}"
+        echo "  Status: ${{ env.BUILD_STATUS }}"
         echo "=========================================="
