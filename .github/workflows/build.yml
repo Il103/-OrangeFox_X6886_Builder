@@ -44,8 +44,6 @@ env:
   DEVICE_CODENAME: X6886
   DEVICE_NAME: Infinix HOT 60 Pro+
   FOX_VERSION: R12.0.1_BETA
-  TG_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-  TG_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
 jobs:
   build:
@@ -57,7 +55,9 @@ jobs:
     steps:
     - name: Set Build Date
       id: date
-      run: echo "BUILD_DATE=$(date +'%Y%m%d-%H%M')" >> $GITHUB_ENV
+      run: |
+        echo "BUILD_DATE=$(date +'%Y%m%d-%H%M')" >> $GITHUB_ENV
+        echo "BUILD_STATUS=STARTED" >> $GITHUB_ENV
 
     - name: Checkout Device Tree
       uses: actions/checkout@v4
@@ -91,8 +91,8 @@ jobs:
       id: sync
       run: |
         echo "Syncing OrangeFox sources..."
-        mkdir -p ~/OrangeFox
-        cd ~/OrangeFox
+        mkdir -p /tmp/OrangeFox
+        cd /tmp/OrangeFox
         repo init -u https://gitlab.com/OrangeFox/misc/scripts.git -b master --no-repo-verify --depth=1
         repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) || repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
         echo "SYNC_DONE=true" >> $GITHUB_ENV
@@ -100,7 +100,7 @@ jobs:
     - name: Setup Device Tree
       run: |
         echo "Setting up device tree..."
-        cd ~/OrangeFox
+        cd /tmp/OrangeFox
         rm -rf device/infinix/X6886
         cp -r $GITHUB_WORKSPACE/device/infinix/X6886 device/infinix/X6886
         ls -la device/infinix/X6886/
@@ -108,7 +108,7 @@ jobs:
     - name: Clone OrangeFox Vendor
       run: |
         echo "Cloning OrangeFox vendor..."
-        cd ~/OrangeFox
+        cd /tmp/OrangeFox
         git clone --depth=1 https://gitlab.com/OrangeFox/vendor/recovery.git vendor/recovery
         cd vendor/recovery
         git checkout ${{ github.event.inputs.fox_branch }}
@@ -116,7 +116,7 @@ jobs:
     - name: Setup Build Environment
       run: |
         echo "Setting up build environment..."
-        cd ~/OrangeFox
+        cd /tmp/OrangeFox
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_DEVICE=${{ env.DEVICE_CODENAME }}
@@ -144,11 +144,11 @@ jobs:
         ccache -M 20G
 
     - name: Build OrangeFox
-      id: build
+      id: build_step
       timeout-minutes: 120
       run: |
         echo "Starting build..."
-        cd ~/OrangeFox
+        cd /tmp/OrangeFox
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         export FOX_BUILD_DEVICE=${{ env.DEVICE_CODENAME }}
@@ -181,7 +181,7 @@ jobs:
       id: package
       run: |
         echo "Packaging output..."
-        cd ~/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}
+        cd /tmp/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}
         ls -la
         mkdir -p $GITHUB_WORKSPACE/output
         for img in *.img; do
@@ -190,13 +190,15 @@ jobs:
           fi
         done
         ls -la $GITHUB_WORKSPACE/output/
-        echo "OUTPUT_FILES=$(ls $GITHUB_WORKSPACE/output/ | tr '\n' ' ')" >> $GITHUB_ENV
+        OUTPUT_LIST=$(ls $GITHUB_WORKSPACE/output/ | tr \'\n\' \' \')
+        echo "OUTPUT_FILES=$OUTPUT_LIST" >> $GITHUB_ENV
+        echo "BUILD_STATUS=SUCCESS" >> $GITHUB_ENV
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: OrangeFox-${{ env.FOX_VERSION }}-${{ env.DEVICE_CODENAME }}-${{ env.BUILD_DATE }}
-        path: ~/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}/*.img
+        path: /tmp/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}/*.img
         retention-days: 30
 
     - name: Upload Build Logs on Failure
@@ -204,7 +206,7 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Build-Logs-${{ env.BUILD_DATE }}
-        path: ~/OrangeFox/out/**/*.log
+        path: /tmp/OrangeFox/out/**/*.log
         retention-days: 7
 
     - name: Create Release
@@ -215,95 +217,62 @@ jobs:
         name: OrangeFox ${{ env.FOX_VERSION }} for ${{ env.DEVICE_NAME }}
         body: |
           ## OrangeFox Recovery ${{ env.FOX_VERSION }}
-          
+
           **Device:** ${{ env.DEVICE_NAME }} (${{ env.DEVICE_CODENAME }})
           **Build Date:** ${{ env.BUILD_DATE }}
           **Android:** 16 (OxygenOS 16 compatible)
           **Target:** ${{ github.event.inputs.build_target }}
-          
+
           ### Warning
           - This is a BETA build
           - Always backup before flashing
           - Test with `fastboot boot` first
-          
+
           ### Notes
           - Supports Android 12-16 decryption
           - OxygenOS 16 / HyperOS compatible
           - Vendor boot build for MT6789
-          
+
           ### Flashing
           ```bash
           fastboot flash vendor_boot OrangeFox-*.img
           # or
           fastboot boot OrangeFox-*.img
           ```
-          
+
           ### Credits
           - OrangeFox Team
           - Device Tree by Il103
-        files: ~/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}/*.img
+        files: |
+          /tmp/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}/*.img
         draft: false
         prerelease: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Telegram Success Notification
-      if: github.event.inputs.enable_telegram == 'true' && success() && env.TG_BOT_TOKEN != ''
+      if: github.event.inputs.enable_telegram == 'true' && success()
       run: |
-        MESSAGE="✅ *OrangeFox Build Complete!*
-
-🦊 *Version:* ${{ env.FOX_VERSION }}
-📱 *Device:* ${{ env.DEVICE_NAME }} (${{ env.DEVICE_CODENAME }})
-📅 *Build Date:* ${{ env.BUILD_DATE }}
-🎯 *Target:* ${{ github.event.inputs.build_target }}
-🌿 *Device Branch:* ${{ github.event.inputs.device_branch }}
-🦊 *Fox Branch:* ${{ github.event.inputs.fox_branch }}
-📦 *Output Files:* ${{ env.OUTPUT_FILES }}
-👤 *Builder:* ${{ github.actor }}
-🔢 *Run Number:* #${{ github.run_number }}
-
-📥 [Download from GitHub Actions](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-🏷️ [View Release](https://github.com/${{ github.repository }}/releases/tag/${{ env.FOX_VERSION }}-${{ env.BUILD_DATE }})"
-
-        curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
-          -d chat_id="${{ env.TG_CHAT_ID }}" \
-          -d parse_mode="Markdown" \
-          -d text="$MESSAGE"
-
-    - name: Capture Error for Telegram
-      if: failure()
-      id: error_capture
-      run: |
-        echo "ERROR_STEP=${{ steps.build.outcome }}" >> $GITHUB_ENV
-        echo "ERROR_DETAILS=Build failed during compilation. Check logs for details." >> $GITHUB_ENV
+        TG_CHAT="${{ secrets.TELEGRAM_CHAT_ID }}"
+        TG_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+        if [ -z "$TG_CHAT" ] || [ -z "$TG_TOKEN" ]; then
+          echo "Telegram secrets not set, skipping notification"
+          exit 0
+        fi
+        MESSAGE="✅ *OrangeFox Build Complete!*\n\n🦊 *Version:* ${{ env.FOX_VERSION }}\n📱 *Device:* ${{ env.DEVICE_NAME }} (${{ env.DEVICE_CODENAME }})\n📅 *Build Date:* ${{ env.BUILD_DATE }}\n🎯 *Target:* ${{ github.event.inputs.build_target }}\n🌿 *Device Branch:* ${{ github.event.inputs.device_branch }}\n🦊 *Fox Branch:* ${{ github.event.inputs.fox_branch }}\n📦 *Output:* ${{ env.OUTPUT_FILES }}\n👤 *Builder:* ${{ github.actor }}\n🔢 *Run:* #${{ github.run_number }}\n\n📥 [Download](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})\n🏷️ [Release](https://github.com/${{ github.repository }}/releases/tag/${{ env.FOX_VERSION }}-${{ env.BUILD_DATE }})"
+        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT"           -d parse_mode="Markdown"           -d text="$MESSAGE"
 
     - name: Telegram Failure Notification
-      if: github.event.inputs.enable_telegram == 'true' && failure() && env.TG_BOT_TOKEN != ''
+      if: github.event.inputs.enable_telegram == 'true' && failure()
       run: |
-        MESSAGE="❌ *OrangeFox Build Failed!*
-
-🦊 *Version:* ${{ env.FOX_VERSION }}
-📱 *Device:* ${{ env.DEVICE_NAME }} (${{ env.DEVICE_CODENAME }})
-📅 *Build Date:* ${{ env.BUILD_DATE }}
-🎯 *Target:* ${{ github.event.inputs.build_target }}
-🌿 *Device Branch:* ${{ github.event.inputs.device_branch }}
-🦊 *Fox Branch:* ${{ github.event.inputs.fox_branch }}
-👤 *Builder:* ${{ github.actor }}
-🔢 *Run Number:* #${{ github.run_number }}
-⚠️ *Failed Step:* ${{ env.ERROR_STEP }}
-
-*Possible Causes:*
-• Device tree compatibility issue
-• Missing dependencies in manifest
-• Build target mismatch
-• Source sync error
-
-🔍 [Check Full Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-
-        curl -s -X POST "https://api.telegram.org/bot${{ env.TG_BOT_TOKEN }}/sendMessage" \
-          -d chat_id="${{ env.TG_CHAT_ID }}" \
-          -d parse_mode="Markdown" \
-          -d text="$MESSAGE"
+        TG_CHAT="${{ secrets.TELEGRAM_CHAT_ID }}"
+        TG_TOKEN="${{ secrets.TELEGRAM_BOT_TOKEN }}"
+        if [ -z "$TG_CHAT" ] || [ -z "$TG_TOKEN" ]; then
+          echo "Telegram secrets not set, skipping notification"
+          exit 0
+        fi
+        MESSAGE="❌ *OrangeFox Build Failed!*\n\n🦊 *Version:* ${{ env.FOX_VERSION }}\n📱 *Device:* ${{ env.DEVICE_NAME }} (${{ env.DEVICE_CODENAME }})\n📅 *Build Date:* ${{ env.BUILD_DATE }}\n🎯 *Target:* ${{ github.event.inputs.build_target }}\n🌿 *Device Branch:* ${{ github.event.inputs.device_branch }}\n🦊 *Fox Branch:* ${{ github.event.inputs.fox_branch }}\n👤 *Builder:* ${{ github.actor }}\n🔢 *Run:* #${{ github.run_number }}\n\n*Possible Causes:*\n• Device tree issue\n• Missing dependencies\n• Build target mismatch\n• Source sync error\n\n🔍 [Check Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT"           -d parse_mode="Markdown"           -d text="$MESSAGE"
 
     - name: Build Summary
       if: always()
