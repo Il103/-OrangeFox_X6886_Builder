@@ -44,6 +44,7 @@ env:
   DEVICE_CODENAME: X6886
   DEVICE_NAME: Infinix HOT 60 Pro+
   FOX_VERSION: R12.0.1_BETA
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -86,21 +87,21 @@ jobs:
     - name: Install Repo Tool
       run: |
         mkdir -p ~/bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+        curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
         chmod a+x ~/bin/repo
-        echo "PATH=$HOME/bin:$PATH" >> $GITHUB_ENV
-        export PATH=$HOME/bin:$PATH
+        echo "$HOME/bin" >> $GITHUB_PATH
+        export PATH="$HOME/bin:$PATH"
         repo --version
 
-    - name: Sync OrangeFox Sources
+    - name: Sync TWRP AOSP Sources
       id: sync
       run: |
-        export PATH=$HOME/bin:$PATH
+        export PATH="$HOME/bin:$PATH"
         mkdir -p /tmp/OrangeFox
         cd /tmp/OrangeFox
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
-        repo init -u https://gitlab.com/OrangeFox/misc/scripts.git -b master --no-repo-verify --depth=1
+        repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-12.1 --no-repo-verify --depth=1
         repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all) ||         repo sync -c --force-sync --no-tags --no-clone-bundle -j$(nproc --all)
 
     - name: Setup Device Tree
@@ -152,15 +153,15 @@ jobs:
       id: check_output
       run: |
         OUT_DIR="/tmp/OrangeFox/out/target/product/${{ env.DEVICE_CODENAME }}"
-        ls -la "$OUT_DIR"
+        ls -la "$OUT_DIR" || true
         mkdir -p $GITHUB_WORKSPACE/output
         for img in "$OUT_DIR"/*.img; do
           if [ -f "$img" ]; then
             cp -v "$img" "$GITHUB_WORKSPACE/output/"
           fi
         done
-        ls -la $GITHUB_WORKSPACE/output/
-        OUTPUT_LIST=$(ls $GITHUB_WORKSPACE/output/ | tr \'\n\' \' \')
+        ls -la $GITHUB_WORKSPACE/output/ || true
+        OUTPUT_LIST=$(ls $GITHUB_WORKSPACE/output/ 2>/dev/null | tr \'\n\' \' \')
         echo "OUTPUT_FILES=$OUTPUT_LIST" >> $GITHUB_ENV
 
     - name: Upload Artifacts
@@ -227,8 +228,8 @@ jobs:
           echo "Telegram secrets not configured"
           exit 0
         fi
-        MSG="✅ *OrangeFox Build Complete!*\n\n🦊 *Version:* ${{ env.FOX_VERSION }}\n📱 *Device:* ${{ env.DEVICE_NAME }}\n📅 *Date:* ${{ env.BUILD_DATE }}\n🎯 *Target:* ${{ github.event.inputs.build_target }}\n📦 *Files:* ${{ env.OUTPUT_FILES }}\n👤 *Builder:* ${{ github.actor }}\n\n📥 [Download](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT" -d parse_mode="Markdown" -d text="$MSG"
+        MSG="Build Complete: ${{ env.FOX_VERSION }} for ${{ env.DEVICE_NAME }}\nDate: ${{ env.BUILD_DATE }}\nTarget: ${{ github.event.inputs.build_target }}\nFiles: ${{ env.OUTPUT_FILES }}\nBuilder: ${{ github.actor }}\n\nDownload: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT" -d text="$MSG"
 
     - name: Telegram Failure
       if: github.event.inputs.enable_telegram == 'true' && failure()
@@ -239,8 +240,8 @@ jobs:
           echo "Telegram secrets not configured"
           exit 0
         fi
-        MSG="❌ *OrangeFox Build Failed!*\n\n🦊 *Version:* ${{ env.FOX_VERSION }}\n📱 *Device:* ${{ env.DEVICE_NAME }}\n📅 *Date:* ${{ env.BUILD_DATE }}\n🎯 *Target:* ${{ github.event.inputs.build_target }}\n👤 *Builder:* ${{ github.actor }}\n\n*Possible Causes:*\n• Device tree issue\n• Missing dependencies\n• Build target mismatch\n• Source sync error\n\n🔍 [Check Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
-        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT" -d parse_mode="Markdown" -d text="$MSG"
+        MSG="Build Failed: ${{ env.FOX_VERSION }} for ${{ env.DEVICE_NAME }}\nDate: ${{ env.BUILD_DATE }}\nTarget: ${{ github.event.inputs.build_target }}\nBuilder: ${{ github.actor }}\n\nCheck Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage"           -d chat_id="$TG_CHAT" -d text="$MSG"
 
     - name: Build Summary
       if: always()
